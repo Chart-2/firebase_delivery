@@ -42,9 +42,9 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
   }
 
   void _openAddressBook() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')));
   }
 
   void _logout() {
@@ -139,15 +139,22 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                                 ),
                               ),
                               child: SingleChildScrollView(
-                                padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+                                padding: const EdgeInsets.fromLTRB(
+                                  18,
+                                  20,
+                                  18,
+                                  20,
+                                ),
                                 child: Column(
                                   children: [
                                     // Avatar
                                     CircleAvatar(
                                       radius: 64,
                                       backgroundColor: const Color(0xFF0F5CA6),
-                                      backgroundImage: (picture != null && picture != "")
-                                          ? NetworkImage(picture) as ImageProvider
+                                      backgroundImage:
+                                          (picture != null && picture != "")
+                                          ? NetworkImage(picture)
+                                                as ImageProvider
                                           : null,
                                       child: (picture == null || picture == "")
                                           ? const Icon(
@@ -172,10 +179,11 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                                     const SizedBox(height: 18),
 
                                     // ชื่อ - นามสกุล
-                                    _InfoRow(label: 'ชื่อ - นามสกุล :', value: name),
+                                    _InfoRow(
+                                      label: 'ชื่อ - นามสกุล :',
+                                      value: name,
+                                    ),
                                     const SizedBox(height: 18),
-
-                                    
 
                                     // Logout button
                                     SizedBox(
@@ -188,9 +196,13 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
                                             vertical: 14,
                                           ),
                                           shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(14),
+                                            borderRadius: BorderRadius.circular(
+                                              14,
+                                            ),
                                             side: BorderSide(
-                                              color: Colors.black.withOpacity(0.35),
+                                              color: Colors.black.withOpacity(
+                                                0.35,
+                                              ),
                                               width: 1,
                                             ),
                                           ),
@@ -234,8 +246,10 @@ class _ProfileRiderPageState extends State<ProfileRiderPage> {
 /// แถวข้อมูลกรอบโค้ง
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, this.value, this.valueWidget})
-      : assert(value != null || valueWidget != null,
-            'ต้องใส่ value หรือ valueWidget อย่างน้อยหนึ่งตัว');
+    : assert(
+        value != null || valueWidget != null,
+        'ต้องใส่ value หรือ valueWidget อย่างน้อยหนึ่งตัว',
+      );
 
   final String label;
   final String? value;

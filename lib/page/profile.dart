@@ -5,9 +5,11 @@ import 'package:flutter_application_4/page/login.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_application_4/widgets/user_footer.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+// เพิ่มบรรทัดนี้ด้านบน
+import 'package:flutter_application_4/page/address_book.dart';
 
 class ProfilePage extends StatefulWidget {
-  final String userId;   // ✅ รับ userId จาก Login/FooterNavBar
+  final String userId; // ✅ รับ userId จาก Login/FooterNavBar
   const ProfilePage({super.key, required this.userId});
 
   @override
@@ -21,9 +23,10 @@ class _ProfilePageState extends State<ProfilePage> {
   XFile? _avatar;
 
   void _openAddressBook() {
-    ScaffoldMessenger.of(
+    Navigator.push(
       context,
-    ).showSnackBar(const SnackBar(content: Text('ไปสมุดที่อยู่ (TODO)')));
+      MaterialPageRoute(builder: (_) => AddressBookPage(userId: widget.userId)),
+    );
   }
 
   void _logout() {
@@ -130,15 +133,22 @@ class _ProfilePageState extends State<ProfilePage> {
                                 ),
                               ),
                               child: SingleChildScrollView(
-                                padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+                                padding: const EdgeInsets.fromLTRB(
+                                  18,
+                                  20,
+                                  18,
+                                  20,
+                                ),
                                 child: Column(
                                   children: [
                                     // Avatar
                                     CircleAvatar(
                                       radius: 64,
                                       backgroundColor: const Color(0xFF0F5CA6),
-                                      backgroundImage: (picture != null && picture != "")
-                                          ? NetworkImage(picture) as ImageProvider
+                                      backgroundImage:
+                                          (picture != null && picture != "")
+                                          ? NetworkImage(picture)
+                                                as ImageProvider
                                           : null,
                                       child: (picture == null || picture == "")
                                           ? const Icon(
@@ -163,7 +173,10 @@ class _ProfilePageState extends State<ProfilePage> {
                                     const SizedBox(height: 18),
 
                                     // ชื่อ - นามสกุล
-                                    _InfoRow(label: 'ชื่อ - นามสกุล :', value: name),
+                                    _InfoRow(
+                                      label: 'ชื่อ - นามสกุล :',
+                                      value: name,
+                                    ),
                                     const SizedBox(height: 18),
 
                                     // สมุดที่อยู่
@@ -211,9 +224,13 @@ class _ProfilePageState extends State<ProfilePage> {
                                             vertical: 14,
                                           ),
                                           shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(14),
+                                            borderRadius: BorderRadius.circular(
+                                              14,
+                                            ),
                                             side: BorderSide(
-                                              color: Colors.black.withOpacity(0.35),
+                                              color: Colors.black.withOpacity(
+                                                0.35,
+                                              ),
                                               width: 1,
                                             ),
                                           ),
@@ -246,10 +263,7 @@ class _ProfilePageState extends State<ProfilePage> {
         },
       ),
       // ✅ ส่ง userId ให้ Footer ด้วย
-      bottomNavigationBar: FooterNavBar(
-        currentIndex: 4,
-        userId: widget.userId,
-      ),
+      bottomNavigationBar: FooterNavBar(currentIndex: 4, userId: widget.userId),
     );
   }
 }
@@ -257,8 +271,10 @@ class _ProfilePageState extends State<ProfilePage> {
 /// แถวข้อมูล (label + ค่า)
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, this.value, this.valueWidget})
-      : assert(value != null || valueWidget != null,
-            'ต้องใส่ value หรือ valueWidget อย่างน้อยหนึ่งตัว');
+    : assert(
+        value != null || valueWidget != null,
+        'ต้องใส่ value หรือ valueWidget อย่างน้อยหนึ่งตัว',
+      );
 
   final String label;
   final String? value;

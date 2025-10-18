@@ -1,3 +1,5 @@
+// register.dart — อัปโหลดรูปไป Supabase Storage แล้วเก็บ public URL ไว้ใน Firestore
+
 import 'dart:io';
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7,6 +9,12 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+// ========= ชื่อบัคเก็ตที่ใช้งาน =========
+// ต้องมีอยู่จริงใน Supabase Storage และเปิด Public + มี RLS policy ที่ให้ anon SELECT/INSERT
+const kBucketProfile = 'avatars';
+const kBucketVehicle = 'avatars';
 
 enum RegisterRole { user, rider }
 
@@ -21,7 +29,6 @@ class _RegisterState extends State<Register> {
   final _formKey = GlobalKey<FormState>();
   final _scrollCtrl = ScrollController();
 
-  // toggle ผู้ใช้/ไรเดอร์
   RegisterRole role = RegisterRole.user;
 
   // ผู้ใช้ทั่วไป
@@ -50,7 +57,7 @@ class _RegisterState extends State<Register> {
   XFile? _vehicleXFile;
   File? _vehicleSavedFile;
 
-  // หมุดที่อยู่ (รับจากหน้า PinLocationPage)
+  // หมุดที่อยู่
   LatLng? _addressPin;
 
   @override
@@ -166,6 +173,76 @@ class _RegisterState extends State<Register> {
     }
   }
 
+  /* -------------------- เดา MIME จากนามสกุล -------------------- */
+  String _guessMimeByExt(String ext) {
+    final e = ext.toLowerCase();
+    if (e == 'jpg' || e == 'jpeg') return 'image/jpeg';
+    if (e == 'png') return 'image/png';
+    if (e == 'webp') return 'image/webp';
+    if (e == 'gif') return 'image/gif';
+    return 'application/octet-stream';
+  }
+
+  /* -------------------- อัปโหลดขึ้น Supabase แล้วคืน Public URL -------------------- */
+  Future<String?> _uploadToSupabaseAndGetUrl({
+    required File? file,
+    required String bucket,
+    required String path, // เช่น 'user_profile/<docId>.jpg'
+  }) async {
+    if (file == null) return null;
+
+    try {
+      final client = Supabase.instance.client;
+      final storage = client.storage;
+
+      // ทำ path ให้สะอาด (ไม่มี / นำหน้า)
+      final cleanPath = path.replaceFirst(RegExp(r'^/+'), '');
+
+      // เดา content-type จากนามสกุลไฟล์ใน path
+      final ext = cleanPath.split('.').last;
+      final mime = _guessMimeByExt(ext);
+
+      // 1) พยายามแบบ binary ก่อน (เร็ว/เสถียรกว่าในหลายเคส)
+      try {
+        final bytes = await file.readAsBytes();
+        await storage
+            .from(bucket)
+            .uploadBinary(
+              cleanPath,
+              bytes,
+              fileOptions: FileOptions(
+                upsert: true,
+                cacheControl: '3600',
+                contentType: mime,
+              ),
+            );
+      } on StorageException {
+        // 2) ถ้า binary ล้มเหลว (เช่น Read failed บนอุปกรณ์บางรุ่น) ให้ fallback เป็น upload(File)
+        await storage
+            .from(bucket)
+            .upload(
+              cleanPath,
+              file,
+              fileOptions: FileOptions(
+                upsert: true,
+                cacheControl: '3600',
+                contentType: mime,
+              ),
+            );
+      }
+
+      // ได้ URL สาธารณะ (ต้องเปิด Public bucket + มี policy SELECT)
+      return storage.from(bucket).getPublicUrl(cleanPath);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('อัปโหลดรูปไม่สำเร็จ: $e')));
+      }
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -275,7 +352,6 @@ class _RegisterState extends State<Register> {
                                     ),
                               ),
                             ),
-
                             SizedBox(
                               height: size.height * 0.72,
                               child: Scrollbar(
@@ -377,8 +453,6 @@ class _RegisterState extends State<Register> {
         validator: (v) => (v ?? '').trim().isEmpty ? 'กรอกชื่อ-นามสกุล' : null,
       ),
       const SizedBox(height: 14),
-
-      // กรอบ "ที่อยู่ของคุณ"
       _GroupBox(
         title: 'ที่อยู่ของคุณ',
         child: Column(
@@ -431,8 +505,6 @@ class _RegisterState extends State<Register> {
         ),
       ),
       const SizedBox(height: 16),
-
-      // ======= หมุดที่อยู่: เปิดหน้าแผนที่ + mini map preview =======
       _GroupBox(
         title: 'หมุดที่อยู่',
         trailing: const Icon(Icons.chevron_right),
@@ -447,7 +519,6 @@ class _RegisterState extends State<Register> {
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: Colors.black54, width: 1.2),
             ),
-            // ... ใน child ของ GestureDetector:
             child: _addressPin == null
                 ? const Center(
                     child: Icon(Icons.add, size: 80, color: Colors.black45),
@@ -460,17 +531,14 @@ class _RegisterState extends State<Register> {
                         IgnorePointer(
                           ignoring: true,
                           child: FlutterMap(
-                            // 🔑 บังคับ rebuild ตามพิกัดหมุด
                             key: ValueKey(
-                              '${_addressPin!.latitude.toStringAsFixed(6)},'
-                              '${_addressPin!.longitude.toStringAsFixed(6)}',
+                              '${_addressPin!.latitude.toStringAsFixed(6)},${_addressPin!.longitude.toStringAsFixed(6)}',
                             ),
                             options: MapOptions(
-                              initialCenter: _addressPin!, // ศูนย์กลาง = หมุด
+                              initialCenter: _addressPin!,
                               initialZoom: 16.0,
                               interactionOptions: const InteractionOptions(
-                                flags:
-                                    InteractiveFlag.none, // preview อย่างเดียว
+                                flags: InteractiveFlag.none,
                               ),
                             ),
                             children: [
@@ -480,7 +548,6 @@ class _RegisterState extends State<Register> {
                                 subdomains: const ['a', 'b', 'c'],
                                 userAgentPackageName: 'com.example.app',
                               ),
-                              // หมุดแดง ตั้งตรงเสมอ
                               MarkerLayer(
                                 rotate: false,
                                 markers: [
@@ -490,10 +557,7 @@ class _RegisterState extends State<Register> {
                                     height: 60,
                                     alignment: Alignment.bottomCenter,
                                     child: Transform.translate(
-                                      offset: const Offset(
-                                        0,
-                                        -45,
-                                      ), // ยกไอคอนให้ปลายแหลมตรงพิกัด
+                                      offset: const Offset(0, -45),
                                       child: const Icon(
                                         Icons.location_on,
                                         size: 44,
@@ -513,7 +577,6 @@ class _RegisterState extends State<Register> {
         ),
       ),
       const SizedBox(height: 16),
-
       _CapsuleField(
         controller: passwordCtrl,
         label: 'รหัสผ่าน',
@@ -552,8 +615,6 @@ class _RegisterState extends State<Register> {
         validator: (v) => (v ?? '').trim().isEmpty ? 'กรอกชื่อ-นามสกุล' : null,
       ),
       const SizedBox(height: 14),
-
-      // ======= รูปยานพาหนะ: โลโก้ + tap to choose =======
       Text(
         'รูปยานพาหนะ',
         style: Theme.of(
@@ -568,7 +629,6 @@ class _RegisterState extends State<Register> {
         onTap: _chooseVehicleSource,
       ),
       const SizedBox(height: 14),
-
       _CapsuleField(
         controller: plateCtrl,
         label: 'ทะเบียนรถ',
@@ -576,7 +636,6 @@ class _RegisterState extends State<Register> {
         validator: (v) => (v ?? '').trim().isEmpty ? 'กรอกทะเบียนรถ' : null,
       ),
       const SizedBox(height: 12),
-
       _DropdownCapsule<String>(
         label: 'ประเภทยานพาหนะ',
         hint: 'กดเพื่อเลือกประเภทยานพาหนะ',
@@ -586,7 +645,6 @@ class _RegisterState extends State<Register> {
         validator: (v) => v == null ? 'เลือกประเภทยานพาหนะ' : null,
       ),
       const SizedBox(height: 12),
-
       _CapsuleField(
         controller: riderPasswordCtrl,
         label: 'รหัสผ่าน',
@@ -601,69 +659,102 @@ class _RegisterState extends State<Register> {
       ),
     ];
   }
-//----------------Register----------------------------
+
+  //----------------Register----------------------------
   Future<void> _submit() async {
-  FocusScope.of(context).unfocus();
-  if (!_formKey.currentState!.validate()) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("กรอกข้อมูลให้ครบถ้วนก่อนสมัครสมาชิก")),
-    );
-    return;
-  }
-
-  try {
-    final firestore = FirebaseFirestore.instance;
-
-    if (role == RegisterRole.user) {
-      // =============== CASE: USER ===============
-      final userRef = await firestore.collection('user').add({
-        "name": nameCtrl.text.trim(),
-        "phone": phoneCtrl.text.trim(),
-        "password": passwordCtrl.text.trim(),
-        "role": "user",
-        "picture": _profileSavedFile?.path ?? "",
-      });
-
-      await firestore.collection('user_address').add({
-        "userid": userRef.id,
-        "address":
-            "${addrNoCtrl.text}, ${subdistrictCtrl.text}, ${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
-        "lat": _addressPin?.latitude,
-        "lng": _addressPin?.longitude,
-      });
-
-    } else if (role == RegisterRole.rider) {
-      // =============== CASE: RIDER ===============
-      final riderRef = await firestore.collection('user').add({
-        "name": riderNameCtrl.text.trim(),
-        "phone": riderPhoneCtrl.text.trim(),
-        "password": riderPasswordCtrl.text.trim(),
-        "role": "rider",
-        "picture": _profileSavedFile?.path ?? "",
-      });
-
-      await firestore.collection('rider_car').add({
-        "userid": riderRef.id,
-        "plate_number": plateCtrl.text.trim(),
-        "car_type": vehicleType,
-        "image_car": _vehicleSavedFile?.path ?? "",
-      });
+    FocusScope.of(context).unfocus();
+    if (!_formKey.currentState!.validate()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("กรอกข้อมูลให้ครบถ้วนก่อนสมัครสมาชิก")),
+      );
+      return;
     }
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("สมัครสมาชิกสำเร็จ (${role == RegisterRole.user ? "ผู้ใช้งาน" : "ไรเดอร์"}) ✅"),
-      ),
-    );
-    Navigator.pop(context); // กลับไปหน้า login
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("เกิดข้อผิดพลาด: $e")),
-    );
-  }
-}
+    try {
+      final firestore = FirebaseFirestore.instance;
 
+      if (role == RegisterRole.user) {
+        // =============== USER ===============
+        final userDoc = firestore.collection('user').doc();
+
+        final File? profileFile =
+            _profileSavedFile ??
+            (_profileXFile != null ? File(_profileXFile!.path) : null);
+
+        final profileUrl = await _uploadToSupabaseAndGetUrl(
+          file: profileFile,
+          bucket: kBucketProfile,
+          path: 'user_profile/${userDoc.id}.jpg',
+        );
+
+        await userDoc.set({
+          "name": nameCtrl.text.trim(),
+          "phone": phoneCtrl.text.trim(),
+          "password": passwordCtrl.text.trim(),
+          "role": "user",
+          "picture": profileUrl ?? "",
+        });
+
+        await firestore.collection('user_address').add({
+          "userid": userDoc.id,
+          "address":
+              "${addrNoCtrl.text}, ${subdistrictCtrl.text}, ${districtCtrl.text}, ${provinceCtrl.text}, ${zipcodeCtrl.text}",
+          "lat": _addressPin?.latitude,
+          "lng": _addressPin?.longitude,
+        });
+      } else {
+        // =============== RIDER ===============
+        final riderDoc = firestore.collection('user').doc();
+
+        final File? profileFile =
+            _profileSavedFile ??
+            (_profileXFile != null ? File(_profileXFile!.path) : null);
+        final profileUrl = await _uploadToSupabaseAndGetUrl(
+          file: profileFile,
+          bucket: kBucketProfile,
+          path: 'user_profile/${riderDoc.id}.jpg',
+        );
+
+        await riderDoc.set({
+          "name": riderNameCtrl.text.trim(),
+          "phone": riderPhoneCtrl.text.trim(),
+          "password": riderPasswordCtrl.text.trim(),
+          "role": "rider",
+          "picture": profileUrl ?? "",
+        });
+
+        final File? vehicleFile =
+            _vehicleSavedFile ??
+            (_vehicleXFile != null ? File(_vehicleXFile!.path) : null);
+        final vehicleUrl = await _uploadToSupabaseAndGetUrl(
+          file: vehicleFile,
+          bucket: kBucketVehicle,
+          path: 'rider_vehicle/${riderDoc.id}.jpg',
+        );
+
+        await firestore.collection('rider_car').add({
+          "userid": riderDoc.id,
+          "plate_number": plateCtrl.text.trim(),
+          "car_type": vehicleType,
+          "image_car": vehicleUrl ?? "",
+        });
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "สมัครสมาชิกสำเร็จ (${role == RegisterRole.user ? "ผู้ใช้งาน" : "ไรเดอร์"}) ✅",
+          ),
+        ),
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("เกิดข้อผิดพลาด: $e")));
+    }
+  }
 }
 
 /* -------------------- Widgets ย่อย -------------------- */
@@ -674,7 +765,6 @@ class _SegmentButton extends StatelessWidget {
     required this.selected,
     required this.onTap,
   });
-
   final String text;
   final bool selected;
   final VoidCallback onTap;
@@ -703,9 +793,9 @@ class _SegmentButton extends StatelessWidget {
         alignment: Alignment.center,
         child: Text(
           text,
-          style: TextStyle(
+          style: const TextStyle(
             fontWeight: FontWeight.w800,
-            color: fg,
+            color: Colors.black87,
             fontSize: 16,
           ),
         ),
@@ -716,7 +806,6 @@ class _SegmentButton extends StatelessWidget {
 
 class _ProfileAvatar extends StatelessWidget {
   const _ProfileAvatar({required this.label, this.onTap, this.imageFile});
-
   final String label;
   final VoidCallback? onTap;
   final File? imageFile;
@@ -760,7 +849,6 @@ class _GroupBox extends StatelessWidget {
     this.trailing,
     this.onHeaderTap,
   });
-
   final String title;
   final Widget child;
   final Widget? trailing;
@@ -858,17 +946,17 @@ class _CapsuleField extends StatelessWidget {
                 width: 1.2,
               ),
             ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(40),
-              borderSide: const BorderSide(color: Colors.black87, width: 1.5),
+            focusedBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(40)),
+              borderSide: BorderSide(color: Colors.black87, width: 1.5),
             ),
-            errorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(40),
-              borderSide: const BorderSide(color: Colors.red, width: 1.2),
+            errorBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(40)),
+              borderSide: BorderSide(color: Colors.red, width: 1.2),
             ),
-            focusedErrorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(40),
-              borderSide: const BorderSide(color: Colors.red, width: 1.5),
+            focusedErrorBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(40)),
+              borderSide: BorderSide(color: Colors.red, width: 1.5),
             ),
           ),
         ),
@@ -917,26 +1005,17 @@ class _DropdownCapsule<T> extends FormField<T> {
                        width: 1.2,
                      ),
                    ),
-                   focusedBorder: OutlineInputBorder(
-                     borderRadius: BorderRadius.circular(40),
-                     borderSide: const BorderSide(
-                       color: Colors.black87,
-                       width: 1.5,
-                     ),
+                   focusedBorder: const OutlineInputBorder(
+                     borderRadius: BorderRadius.all(Radius.circular(40)),
+                     borderSide: BorderSide(color: Colors.black87, width: 1.5),
                    ),
-                   errorBorder: OutlineInputBorder(
-                     borderRadius: BorderRadius.circular(40),
-                     borderSide: const BorderSide(
-                       color: Colors.red,
-                       width: 1.2,
-                     ),
+                   errorBorder: const OutlineInputBorder(
+                     borderRadius: BorderRadius.all(Radius.circular(40)),
+                     borderSide: BorderSide(color: Colors.red, width: 1.2),
                    ),
-                   focusedErrorBorder: OutlineInputBorder(
-                     borderRadius: BorderRadius.circular(40),
-                     borderSide: const BorderSide(
-                       color: Colors.red,
-                       width: 1.5,
-                     ),
+                   focusedErrorBorder: const OutlineInputBorder(
+                     borderRadius: BorderRadius.all(Radius.circular(40)),
+                     borderSide: BorderSide(color: Colors.red, width: 1.5),
                    ),
                    errorText: state.errorText,
                  ),
@@ -971,7 +1050,6 @@ class _RedButton extends StatelessWidget {
     required this.onPressed,
     this.background = const Color(0xFFE96356),
   });
-
   final String text;
   final VoidCallback onPressed;
   final Color background;
@@ -999,10 +1077,9 @@ class _RedButton extends StatelessWidget {
   }
 }
 
-/* -------- ยานพาหนะ: การ์ดรูป + โลโก้รถ + tap เพื่อเลือกภาพ -------- */
+/* -------- ยานพาหนะ: การ์ดรูป -------- */
 class _VehicleImageCard extends StatelessWidget {
   const _VehicleImageCard({this.imageFile, this.onTap});
-
   final File? imageFile;
   final VoidCallback? onTap;
 
@@ -1023,7 +1100,7 @@ class _VehicleImageCard extends StatelessWidget {
             children: [
               if (imageFile != null) Image.file(imageFile!, fit: BoxFit.cover),
               if (imageFile == null)
-                Center(
+                const Center(
                   child: Icon(
                     Icons.two_wheeler,
                     size: 96,
